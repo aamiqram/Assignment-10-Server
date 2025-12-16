@@ -91,6 +91,37 @@ app.get("/api/test-db", async (req, res) => {
   }
 });
 
+// TRANSACTION ROUTES
+// Get all transactions for a user
+// URL: GET /api/transactions/:email?sort=date-desc
+app.get("/api/transactions/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { sort } = req.query;
+
+    // Determine sort option
+    let sortOption = { date: -1 }; // Default: newest first
+
+    if (sort === "date-asc") sortOption = { date: 1 };
+    else if (sort === "amount-desc") sortOption = { amount: -1 };
+    else if (sort === "amount-asc") sortOption = { amount: 1 };
+
+    const transactions = await db
+      .collection("transactions")
+      .find({ email })
+      .sort(sortOption)
+      .toArray();
+
+    res.json(transactions);
+  } catch (error) {
+    console.error("Error fetching transactions:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+});
+
 
 
 // ERROR HANDLING MIDDLEWARE
