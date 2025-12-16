@@ -93,6 +93,34 @@ app.get("/api/test-db", async (req, res) => {
 
 
 
+// ERROR HANDLING MIDDLEWARE
+// 404 handler - catches all undefined routes
+app.use((req, res) => {
+  res.status(404).json({
+    message: "Route not found",
+    requestedUrl: req.originalUrl,
+    method: req.method,
+    availableRoutes: {
+      root: "GET /",
+      health: "GET /api/health",
+      transactions: "GET /api/transactions/:email",
+      transaction: "GET /api/transaction/:id",
+    },
+  });
+});
+
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error("Global error handler:", error);
+  res.status(500).json({
+    message: "Internal server error",
+    error:
+      process.env.NODE_ENV === "development"
+        ? error.message
+        : "Something went wrong",
+  });
+});
+
 // SERVER STARTUP
 connectDB().then(() => {
   app.listen(PORT, () => {
