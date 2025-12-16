@@ -282,7 +282,37 @@ app.put("/api/transactions/:id", async (req, res) => {
   }
 });
 
+// Delete transaction
+// URL: DELETE /api/transactions/:id
+app.delete("/api/transactions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    // Validate ObjectId
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid transaction ID" });
+    }
+
+    const result = await db
+      .collection("transactions")
+      .deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    res.json({
+      message: "Transaction deleted successfully",
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error("Error deleting transaction:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+});
 
 // ERROR HANDLING MIDDLEWARE
 // 404 handler - catches all undefined routes
