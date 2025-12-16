@@ -223,6 +223,65 @@ app.post("/api/transactions", async (req, res) => {
   }
 });
 
+// Update transaction
+// URL: PUT /api/transactions/:id
+// Body: { type, category, amount, description, date }
+app.put("/api/transactions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, category, amount, description, date } = req.body;
+
+    // Validate ObjectId
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid transaction ID" });
+    }
+
+    // Validation
+    if (!type || !category || !amount || !description || !date) {
+      return res.status(400).json({
+        message: "Missing required fields",
+        required: ["type", "category", "amount", "description", "date"],
+      });
+    }
+
+    // Validate amount
+    if (isNaN(amount) || amount <= 0) {
+      return res
+        .status(400)
+        .json({ message: "Amount must be a positive number" });
+    }
+
+    const result = await db.collection("transactions").updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          type,
+          category,
+          amount: parseFloat(amount),
+          description,
+          date: new Date(date),
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    res.json({
+      message: "Transaction updated successfully",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Error updating transaction:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+});
+
 
 
 // ERROR HANDLING MIDDLEWARE
