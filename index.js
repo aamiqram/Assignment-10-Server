@@ -151,6 +151,78 @@ app.get("/api/transaction/:id", async (req, res) => {
   }
 });
 
+// Create new transaction
+// URL: POST /api/transactions
+// Body: { type, category, amount, description, date, email, name }
+app.post("/api/transactions", async (req, res) => {
+  try {
+    const { type, category, amount, description, date, email, name } = req.body;
+
+    // Validation
+    if (
+      !type ||
+      !category ||
+      !amount ||
+      !description ||
+      !date ||
+      !email ||
+      !name
+    ) {
+      return res.status(400).json({
+        message: "Missing required fields",
+        required: [
+          "type",
+          "category",
+          "amount",
+          "description",
+          "date",
+          "email",
+          "name",
+        ],
+      });
+    }
+
+    // Validate transaction type
+    if (!["Income", "Expense"].includes(type)) {
+      return res
+        .status(400)
+        .json({ message: "Type must be either Income or Expense" });
+    }
+
+    // Validate amount
+    if (isNaN(amount) || amount <= 0) {
+      return res
+        .status(400)
+        .json({ message: "Amount must be a positive number" });
+    }
+
+    const transaction = {
+      type,
+      category,
+      amount: parseFloat(amount),
+      description,
+      date: new Date(date),
+      email,
+      name,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await db.collection("transactions").insertOne(transaction);
+
+    res.status(201).json({
+      message: "Transaction created successfully",
+      transaction: { ...transaction, _id: result.insertedId },
+    });
+  } catch (error) {
+    console.error("Error creating transaction:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+});
+
 
 
 // ERROR HANDLING MIDDLEWARE
