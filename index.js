@@ -1,63 +1,361 @@
 import express from "express";
-import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
-import Transaction from "./models/Transaction.js";
+import { MongoClient, ObjectId } from "mongodb";
 
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: "*" })); // Quick MVP
+const PORT = process.env.PORT || 5000;
+
+// MIDDLEWARE SETUP
+
+app.use(cors());
 app.use(express.json());
 
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => console.log("Mongo OK"))
-  .catch((err) => console.error("Mongo error:", err));
+// Request logging middleware (helpful for debugging)
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
 
-app.get("/api/transactions/my-transactions", async (req, res) => {
-  const { userEmail } = req.query;
-  const transactions = await Transaction.find({ userEmail }).sort({
-    createdAt: -1,
+// MONGODB CONNECTION
+
+let db;
+const client = new MongoClient(process.env.MONGODB_URI);
+
+async function connectDB() {
+  try {
+    //await client.connect();
+    db = client.db("finease");
+    console.log("✅ Connected to MongoDB Atlas");
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error);
+    process.exit(1);
+  }
+}
+
+// ROOT & TEST ROUTES
+// Root route
+app.get("/", (req, res) => {
+  res.json({
+    message: "🎉 Welcome to FinEase API",
+    version: "1.0.0",
+    status: "running",
+    endpoints: {
+      transactions: {
+        getAll: "GET /api/transactions/:email",
+        getOne: "GET /api/transaction/:id",
+        create: "POST /api/transactions",
+        update: "PUT /api/transactions/:id",
+        delete: "DELETE /api/transactions/:id",
+      },
+      test: {
+        health: "GET /api/health",
+        database: "GET /api/test-db",
+      },
+    },
   });
-  res.json(transactions);
 });
 
-app.post("/api/transactions/add-transaction", async (req, res) => {
-  const transaction = new Transaction(req.body);
-  await transaction.save();
-  res.status(201).json(transaction);
+// Health check route
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    database: db ? "connected" : "disconnected",
+  });
 });
 
-app.get("/api/transactions/:id", async (req, res) => {
-  const transaction = await Transaction.findById(req.params.id);
-  res.json(transaction);
+// Database test route
+app.get("/api/test-db", async (req, res) => {
+  try {
+    const transactions = await db
+      .collection("transactions")
+      .find({})
+      .limit(10)
+      .toArray();
+
+    res.json({
+      message: "Database connection successful",
+      totalTransactions: await db.collection("transactions").countDocuments(),
+      sampleTransactions: transactions,
+      collections: await db.listCollections().toArray(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Database test failed",
+      error: error.message,
+    });
+  }
 });
 
-app.put("/api/transactions/update/:id", async (req, res) => {
-  const transaction = await Transaction.findByIdAndUpdate(
-    req.params.id,
-    req.body,
-    { new: true }
-  );
-  res.json(transaction);
+// TRANSACTION ROUTES
+// Get all transactions for a user
+// URL: GET /api/transactions/:email?sort=date-desc
+app.get("/api/transactions/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { sort } = req.query;
+
+    // Determine sort option
+    let sortOption = { date: -1 }; // Default: newest first
+
+    if (sort === "date-asc") sortOption = { date: 1 };
+    else if (sort === "amount-desc") sortOption = { amount: -1 };
+    else if (sort === "amount-asc") sortOption = { amount: 1 };
+
+    const transactions = await db
+      .collection("transactions")
+      .find({ email })
+      .sort(sortOption)
+      .toArray();
+
+    res.json(transactions);
+  } catch (error) {
+    console.error("Error fetching transactions:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
 });
 
-app.delete("/api/transactions/delete/:id", async (req, res) => {
-  await Transaction.findByIdAndDelete(req.params.id);
-  res.json({ message: "Deleted" });
+// Get single transaction by ID
+// URL: GET /api/transaction/:id
+app.get("/api/transaction/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ObjectId
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid transaction ID" });
+    }
+
+    const transaction = await db
+      .collection("transactions")
+      .findOne({ _id: new ObjectId(id) });
+
+    if (!transaction) {
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    res.json(transaction);
+  } catch (error) {
+    console.error("Error fetching transaction:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
 });
 
-app.get("/api/transactions/summary", async (req, res) => {
-  const { userEmail } = req.query;
-  const aggregates = await Transaction.aggregate([
-    { $match: { userEmail } },
-    { $group: { _id: "$type", total: { $sum: "$amount" } } },
-  ]);
-  const income = aggregates.find((a) => a._id === "income")?.total || 0;
-  const expense = aggregates.find((a) => a._id === "expense")?.total || 0;
-  res.json({ balance: income - expense, income, expenses: expense });
+// Create new transaction
+// URL: POST /api/transactions
+// Body: { type, category, amount, description, date, email, name }
+app.post("/api/transactions", async (req, res) => {
+  try {
+    const { type, category, amount, description, date, email, name } = req.body;
+
+    // Validation
+    if (
+      !type ||
+      !category ||
+      !amount ||
+      !description ||
+      !date ||
+      !email ||
+      !name
+    ) {
+      return res.status(400).json({
+        message: "Missing required fields",
+        required: [
+          "type",
+          "category",
+          "amount",
+          "description",
+          "date",
+          "email",
+          "name",
+        ],
+      });
+    }
+
+    // Validate transaction type
+    if (!["Income", "Expense"].includes(type)) {
+      return res
+        .status(400)
+        .json({ message: "Type must be either Income or Expense" });
+    }
+
+    // Validate amount
+    if (isNaN(amount) || amount <= 0) {
+      return res
+        .status(400)
+        .json({ message: "Amount must be a positive number" });
+    }
+
+    const transaction = {
+      type,
+      category,
+      amount: parseFloat(amount),
+      description,
+      date: new Date(date),
+      email,
+      name,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await db.collection("transactions").insertOne(transaction);
+
+    res.status(201).json({
+      message: "Transaction created successfully",
+      transaction: { ...transaction, _id: result.insertedId },
+    });
+  } catch (error) {
+    console.error("Error creating transaction:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server on ${PORT}`));
+// Update transaction
+// URL: PUT /api/transactions/:id
+// Body: { type, category, amount, description, date }
+app.put("/api/transactions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, category, amount, description, date } = req.body;
+
+    // Validate ObjectId
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid transaction ID" });
+    }
+
+    // Validation
+    if (!type || !category || !amount || !description || !date) {
+      return res.status(400).json({
+        message: "Missing required fields",
+        required: ["type", "category", "amount", "description", "date"],
+      });
+    }
+
+    // Validate amount
+    if (isNaN(amount) || amount <= 0) {
+      return res
+        .status(400)
+        .json({ message: "Amount must be a positive number" });
+    }
+
+    const result = await db.collection("transactions").updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          type,
+          category,
+          amount: parseFloat(amount),
+          description,
+          date: new Date(date),
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    res.json({
+      message: "Transaction updated successfully",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Error updating transaction:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+});
+
+// Delete transaction
+// URL: DELETE /api/transactions/:id
+app.delete("/api/transactions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ObjectId
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid transaction ID" });
+    }
+
+    const result = await db
+      .collection("transactions")
+      .deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    res.json({
+      message: "Transaction deleted successfully",
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error("Error deleting transaction:", error);
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+    });
+  }
+});
+
+// ERROR HANDLING MIDDLEWARE
+// 404 handler - catches all undefined routes
+app.use((req, res) => {
+  res.status(404).json({
+    message: "Route not found",
+    requestedUrl: req.originalUrl,
+    method: req.method,
+    availableRoutes: {
+      root: "GET /",
+      health: "GET /api/health",
+      transactions: "GET /api/transactions/:email",
+      transaction: "GET /api/transaction/:id",
+    },
+  });
+});
+
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error("Global error handler:", error);
+  res.status(500).json({
+    message: "Internal server error",
+    error:
+      process.env.NODE_ENV === "development"
+        ? error.message
+        : "Something went wrong",
+  });
+});
+
+// SERVER STARTUP
+connectDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`🚀 FinEase API Server Running Port: ${PORT}Environment: ${
+      process.env.NODE_ENV || "development"
+    }Database: Connected ✅ View API: http://localhost:${PORT}
+    `);
+  });
+});
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  console.log("\n🛑 Shutting down gracefully...");
+  await client.close();
+  console.log("✅ Database connection closed");
+  process.exit(0);
+});
